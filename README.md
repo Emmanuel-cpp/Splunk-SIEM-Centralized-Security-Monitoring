@@ -1,88 +1,82 @@
-# Centralized SIEM with Splunk — Aggregating Wazuh, Suricata, Linux, and Windows into a Single Detection Platform
+# Splunk SIEM: Centralized Security Monitoring
 
 `Splunk` `Wazuh` `Suricata` `Windows` `Linux` `MITRE`  **Status: Complete**
 
 ## Overview
 
-This is **Phase 5** of a progressive security monitoring series. The previous four phases built a complete detection stack — host-based intrusion detection with OSSEC, a full Wazuh SIEM, a hybrid cloud SOC on AWS, and a dual-layer Suricata + Wazuh network/host lab. Every one of those phases ended with the same note: *Splunk is next.* This phase delivers it.
+This is Phase 5 of a progressive security monitoring series. The earlier phases built the detection tools one at a time: host based intrusion detection with OSSEC, a full Wazuh SIEM, a hybrid cloud SOC on AWS, and a dual layer Suricata and Wazuh lab covering both network and host. Each of those projects ended with the same line, that Splunk was coming next. This is that project.
 
-Here, **Splunk Enterprise becomes the central aggregation and correlation platform**. Instead of each tool reporting into its own separate dashboard, all detection sources feed one SIEM. Suricata's network alerts, Wazuh's host alerts, raw Linux authentication logs, and Windows Event Logs are ingested into Splunk simultaneously, where they can be searched, correlated, and visualized from a single pane of glass.
+The idea here is different from the earlier phases. Those were about building detectors. This one is about pulling everything together. Instead of Suricata writing to its own log, Wazuh having its own dashboard, and the Linux and Windows logs sitting on separate machines, all of it now feeds one platform. Splunk ingests the network alerts, the host alerts, the raw Linux auth logs, and the Windows event logs at the same time, and lets you search and correlate across all of them.
 
-The result is what a real SOC actually looks like: one platform where an analyst sees a single attack reflected across the network layer, the host layer, and the raw OS logs at the same time.
+That is what a real SOC looks like. One place where a single attack shows up across the network, the host, and the raw OS logs at once.
 
-> **Phase 1** — OSSEC Host-Based IDS
-> **Phase 2** — Wazuh On-Premise SIEM
-> **Phase 3** — Wazuh + AWS Hybrid SOC
-> **Phase 4** — Suricata + Wazuh Dual-Layer Detection
-> **Phase 5** — This project: all sources unified in Splunk
+> Phase 1: OSSEC Host Based IDS
+> Phase 2: Wazuh On Premise SIEM
+> Phase 3: Wazuh and AWS Hybrid SOC
+> Phase 4: Suricata and Wazuh Dual Layer Detection
+> Phase 5: this project, all sources unified in Splunk
 
----
+## Why centralize into Splunk
 
-## Why Centralize into Splunk
+The earlier phases already proved the individual tools work. The problem was that the data lived in silos. Suricata in its log, Wazuh in its dashboard, the Linux and Windows logs on their own machines. Investigating one incident meant jumping between four places and stitching the timeline together in your head.
 
-The earlier phases proved that individual detection tools work. But in each one, the data lived in its own silo — Suricata wrote to its log, Wazuh had its own dashboard, Linux and Windows logs sat on their own machines. An analyst investigating an incident would have to jump between four separate places and mentally stitch the timeline together.
+A SIEM fixes that. Everything gets indexed in one searchable platform, so a single query pulls the whole picture. When the SSH brute force hits the Ubuntu server, the same attack is now visible three ways in one search: the raw `Failed password` lines from the OS, the severity scored alert from Wazuh, and any network signatures from Suricata, all timestamped and lined up.
 
-A SIEM solves this. By ingesting every source into one indexed, searchable platform, a single query can pull the complete picture of an attack. When an SSH brute force hits the Ubuntu server, the same event is now visible three ways in one search — as raw `Failed password` lines from the OS, as a severity-scored correlated alert from Wazuh, and (for network-visible activity) as Suricata signatures — all timestamped and cross-referenceable.
-
-This is the difference between *log collection* and *security operations*.
-
----
+That is the gap between collecting logs and actually running security operations.
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│                          ATTACK SURFACE                               │
-│   Kali Linux Attacker — 192.168.0.50                                  │
-│   SSH brute force · reconnaissance                                    │
-└─────────────────────────────┬────────────────────────────────────────┘
-                              │
-                              ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│              UBUNTU SOC SERVER — 192.168.0.150 / 192.168.56.101       │
-│                                                                        │
-│   ┌────────────────┐   ┌────────────────┐   ┌──────────────────────┐ │
-│   │ Suricata NIDS  │   │ Wazuh Manager  │   │ Linux OS Logs        │ │
-│   │ eve.json       │   │ alerts.json    │   │ syslog · auth.log    │ │
-│   │ (network)      │   │ (host detect)  │   │ (raw OS events)      │ │
-│   └───────┬────────┘   └───────┬────────┘   └──────────┬───────────┘ │
-│           │                    │                        │             │
-│           └────────────────────┼────────────────────────┘             │
-│                                ▼                                       │
-│                    ┌───────────────────────┐                          │
-│                    │   SPLUNK ENTERPRISE   │                          │
-│                    │   Indexer + Search    │                          │
-│                    │   Web UI :8000        │                          │
-│                    │   Receiver :9997      │                          │
-│                    └───────────┬───────────┘                          │
-└────────────────────────────────┼──────────────────────────────────────┘
-                                 ▲
-                                 │  forwards over :9997
-                                 │
-┌────────────────────────────────┴──────────────────────────────────────┐
-│              WINDOWS ENDPOINT — 192.168.0.200                          │
-│              Splunk Universal Forwarder                                │
-│              WinEventLog: Security · System · Application              │
-└────────────────────────────────────────────────────────────────────────┘
++----------------------------------------------------------------------+
+|                          ATTACK SURFACE                              |
+|   Kali Linux Attacker  192.168.0.50                                  |
+|   SSH brute force, reconnaissance                                    |
++-----------------------------+----------------------------------------+
+                              |
+                              v
++----------------------------------------------------------------------+
+|          UBUNTU SOC SERVER  192.168.0.150 / 192.168.56.101           |
+|                                                                      |
+|   +--------------+   +--------------+   +----------------------+     |
+|   | Suricata     |   | Wazuh Mgr    |   | Linux OS Logs        |     |
+|   | eve.json     |   | alerts.json  |   | syslog, auth.log     |     |
+|   | (network)    |   | (host)       |   | (raw OS events)      |     |
+|   +------+-------+   +------+-------+   +----------+-----------+     |
+|          |                  |                      |                 |
+|          +------------------+----------------------+                 |
+|                             v                                        |
+|                 +-----------------------+                            |
+|                 |   SPLUNK ENTERPRISE   |                            |
+|                 |   Indexer + Search    |                            |
+|                 |   Web UI :8000        |                            |
+|                 |   Receiver :9997      |                            |
+|                 +-----------+-----------+                            |
++-----------------------------+----------------------------------------+
+                             ^
+                             |  forwards over :9997
+                             |
++-----------------------------+----------------------------------------+
+|          WINDOWS ENDPOINT  192.168.0.200                            |
+|          Splunk Universal Forwarder                                 |
+|          WinEventLog: Security, System, Application                 |
++----------------------------------------------------------------------+
 ```
 
 | Component | Role | Detail |
 |---|---|---|
-| Ubuntu SOC Server | Splunk indexer + all local sources | Splunk Enterprise 10.2.3 |
+| Ubuntu SOC Server | Splunk indexer plus all local sources | Splunk Enterprise 10.2.3 |
 | Splunk Web UI | Search, dashboards, analysis | Port 8000 |
 | Splunk Receiver | Ingests forwarder data | Port 9997 |
-| Wazuh Manager | Host detection sensor → Splunk | Wazuh 4.7.5, JSON output |
-| Suricata | Network detection sensor → Splunk | eve.json, ~49,895 ET rules |
+| Wazuh Manager | Host detection sensor into Splunk | Wazuh 4.7.5, JSON output |
+| Suricata | Network detection sensor into Splunk | eve.json, ~49,895 ET rules |
 | Windows Endpoint | Monitored endpoint | Splunk Universal Forwarder 10.2.3 |
 | Kali Linux | Attacker | 192.168.0.50 |
 
-**Architectural note:** In this project Wazuh runs purely as a **detection sensor** feeding Splunk, not as a standalone SIEM. Its heavy indexer and dashboard components are disabled to keep the platform stable on a resource-constrained VM — Splunk is the search and storage engine. Automated active-response blocking is demonstrated separately in the OSSEC and Suricata + Wazuh phases; the focus here is centralized aggregation and correlation.
+A note on the design. In this project Wazuh runs only as a detection sensor feeding Splunk, not as a full standalone SIEM. Its indexer and dashboard components are switched off to keep things stable on a VM with limited RAM, and Splunk does the storage and search. Automated active response blocking is not the focus here, it was covered in the OSSEC and Suricata phases. This project is about getting everything into one place and correlating it.
 
----
+## Data sources ingested
 
-## Data Sources Ingested
-
-Four independent source types, six log streams, two hosts — all landing in Splunk simultaneously.
+Four source types, six log streams, two hosts, all landing in Splunk at once.
 
 | Source | Sourcetype | Host | Layer |
 |---|---|---|---|
@@ -90,25 +84,23 @@ Four independent source types, six log streams, two hosts — all landing in Spl
 | `/var/ossec/logs/alerts/alerts.json` | `wazuh_alerts` | ubuntu | Host detection |
 | `/var/log/syslog` | `syslog` | ubuntu | OS system |
 | `/var/log/auth.log` | `linux_secure` | ubuntu | OS authentication |
-| `WinEventLog:Security` | `WinEventLog:Security` | Emmanuel-Desktop | Windows security |
-| `WinEventLog:System` | `WinEventLog:System` | Emmanuel-Desktop | Windows system |
-| `WinEventLog:Application` | `WinEventLog:Application` | Emmanuel-Desktop | Windows application |
+| `WinEventLog:Security` | `WinEventLog:Security` | Emmanuel-Desktop-wise | Windows security |
+| `WinEventLog:System` | `WinEventLog:System` | Emmanuel-Desktop-wise | Windows system |
+| `WinEventLog:Application` | `WinEventLog:Application` | Emmanuel-Desktop-wise | Windows application |
 
-Verification search confirming all sources live simultaneously:
+Search to confirm everything is live at the same time:
 
 ```spl
 index=* earliest=-15m | stats count by source sourcetype host
 ```
 
-> *Screenshot: `all-sources-ingesting.png` — all six sourcetypes reporting at once*
-
----
+![All sources ingesting](screenshots/all-sources-ingesting.png)
 
 ## Configuration
 
-### Splunk receiver (Ubuntu)
+### Splunk receiver on Ubuntu
 
-Enable the receiving port for the Windows forwarder, in `/opt/splunk/etc/system/local/inputs.conf`:
+Turn on the receiving port for the Windows forwarder in `/opt/splunk/etc/system/local/inputs.conf`:
 
 ```ini
 [splunktcp://9997]
@@ -116,7 +108,7 @@ connection_host = ip
 disabled = false
 ```
 
-### Local source monitors (Ubuntu)
+### Local source monitors on Ubuntu
 
 ```ini
 [monitor:///var/log/syslog]
@@ -135,11 +127,11 @@ index = main
 sourcetype = wazuh_alerts
 ```
 
-Suricata's `eve.json` is monitored the same way. Wazuh's **JSON** output is used rather than the plain-text `alerts.log` so that fields (rule level, description, source IP, MITRE mapping) parse natively into Splunk rather than needing regex extraction.
+Suricata's `eve.json` is monitored the same way. I used Wazuh's JSON output rather than the plain text `alerts.log` so the fields like rule level, description, source IP and MITRE mapping parse straight into Splunk instead of needing regex.
 
 ### Windows Universal Forwarder
 
-On the Windows endpoint, `inputs.conf` collects the event logs via the Windows Event Log API:
+On the Windows endpoint, `inputs.conf` collects the event logs through the Windows Event Log API:
 
 ```ini
 [WinEventLog://Security]
@@ -155,44 +147,40 @@ disabled = false
 index = main
 ```
 
-And the forwarder is pointed at the Splunk receiver:
+And the forwarder points at the Splunk receiver:
 
 ```
 splunk add forward-server 192.168.0.150:9997
 ```
 
----
+## Attack demonstration and detection
 
-## Attack Demonstration & Detection
+### SSH brute force, seen three ways
 
-### SSH Brute Force — detected across three layers
-
-From Kali, a credential brute force was launched against the Ubuntu SSH service:
+From Kali, a credential brute force against the Ubuntu SSH service:
 
 ```bash
 hydra -l root -P /usr/share/wordlists/rockyou.txt ssh://192.168.0.150 -t 4 -V
 ```
 
-> *Screenshot: `hydra-attack.png` — attacker view from Kali*
+![Hydra attack from Kali](screenshots/hydra-attack.png)
 
-The same attack was then observed in Splunk at multiple fidelities.
+The same attack then shows up in Splunk at different levels of detail.
 
-**1 — Raw OS authentication failures (`linux_secure` / auth.log):**
+First, the raw OS authentication failures from auth.log:
 
 ```spl
 index=* sourcetype=linux_secure "Failed password" earliest=-10m
 ```
-
-Returned the raw daemon lines, e.g.:
 
 ```
 Failed password for root from 192.168.0.50 port 51986 ssh2
 Failed password for root from 192.168.0.50 port 52006 ssh2
 ```
 
-> *Screenshot: `auth-log-failures.png`*
+![Raw auth.log failures](screenshots/auth-log-failures.png)
 
-**2 — Wazuh correlated detection with severity escalation (`wazuh_alerts`):**
+Second, and this is the important one, Wazuh's correlated detection with severity escalation:
 
 ```spl
 index=* sourcetype=wazuh_alerts earliest=-10m
@@ -200,126 +188,112 @@ index=* sourcetype=wazuh_alerts earliest=-10m
 | table _time rule.level rule.description data.srcip
 ```
 
-This is the core result. Individual failed logins register as **Level 5** (`sshd: authentication failed`), but Wazuh's correlation engine recognizes the *pattern* of repeated failures from a single source and escalates to **Level 10** — `sshd: brute force trying to get access to the system` — all attributed to source IP `192.168.0.50`.
+Individual failed logins come in as Level 5, `sshd: authentication failed`. But once Wazuh sees the pattern of repeated failures from one source, it escalates to Level 10, `sshd: brute force trying to get access to the system`, all tied to 192.168.0.50.
 
 | _time | rule.level | rule.description | data.srcip |
 |---|---|---|---|
 | 22:08:23 | 5 | sshd: authentication failed | 192.168.0.50 |
 | 22:08:26 | 5 | sshd: authentication failed | 192.168.0.50 |
-| **22:08:27** | **10** | **sshd: brute force trying to get access to the system** | 192.168.0.50 |
+| 22:08:27 | 10 | sshd: brute force trying to get access to the system | 192.168.0.50 |
 | 22:08:29 | 5 | sshd: authentication failed | 192.168.0.50 |
 
-> *Screenshot: `wazuh-bruteforce-correlation.png` — the Level 5 → Level 10 escalation*
+![Wazuh brute force correlation](screenshots/wazuh-bruteforce-correlation.png)
 
-**3 — Full attack window across all sources:**
+Third, the whole attack window across every source:
 
 ```spl
 index=* earliest=-15m | stats count by source sourcetype host
 ```
 
-Shows the same attack window reflected simultaneously across Suricata (network), Wazuh and auth.log (host), and Windows logs — the defense-in-depth picture in a single frame.
+This shows the same window reflected across Suricata at the network layer, Wazuh and auth.log at the host layer, and the Windows logs, all in one frame.
 
-> *Screenshot: `all-sources-during-attack.png`*
+![All sources during attack](screenshots/all-sources-during-attack.png)
 
-The value demonstrated here: **raw evidence and correlated detection of the same event, side by side, in one platform.** The auth.log lines are ground truth; the Wazuh alert is the interpreted, severity-scored, attributable detection an analyst would actually action.
+The point of all this is having the raw evidence and the correlated detection side by side in one platform. The auth.log lines are the ground truth of what happened. The Wazuh alert is the interpreted, scored, attributable version an analyst would actually act on.
 
----
+## Troubleshooting log
 
-## Troubleshooting Log
+The real problems I hit and how I fixed them.
 
-Real deployment issues encountered and how they were resolved.
+### Splunk could not read the Linux system logs
 
-### Splunk could not read Linux system logs (permissions)
+The syslog and auth.log inputs were configured correctly and the files were clearly being written to, but nothing from either ever showed up in Splunk. Suricata and Wazuh JSON came in fine, so the ingestion itself worked, which made this confusing at first.
 
-**Symptom:** `syslog` and `auth.log` inputs were configured correctly and the files were actively being written, yet no `syslog` or `linux_secure` events ever appeared in Splunk. Suricata and Wazuh JSON ingested fine.
+The cause turned out to be permissions. Splunk runs as the `splunk` user. On Ubuntu, `/var/log/syslog` and `/var/log/auth.log` are owned `syslog:adm` with permissions `-rw-r-----`, so only the syslog user and the adm group can read them. That restriction is on purpose, auth logs hold sensitive data. The splunk user was not in the adm group, so it was silently failing to open the files.
 
-**Root cause:** Splunk runs as the `splunk` service user. On Ubuntu, `/var/log/syslog` and `/var/log/auth.log` are owned `syslog:adm` with permissions `-rw-r-----` — readable only by the `syslog` user and the `adm` group. This is deliberate: Linux restricts authentication logs because they contain sensitive security data. The `splunk` user was not in the `adm` group, so it silently failed to read the files.
-
-**Fix:**
+The fix was one line, add splunk to the adm group and restart:
 
 ```bash
 sudo usermod -aG adm splunk
 sudo systemctl restart splunk
 ```
 
-After the restart, `syslog` and `linux_secure` immediately began ingesting. This is the classic Splunk-on-Linux ingestion gotcha — the config is correct but the service account lacks read permission on protected logs.
+After that, syslog and linux_secure started flowing straight away. This is the classic Splunk on Linux trap. The config is right but the service account cannot read the protected logs.
 
 ### Duplicate ingestion from scattered config files
 
-**Symptom:** Wazuh alerts were being counted two to three times; `syslog` and `auth.log` each appeared multiple times in the effective config.
+At one point Wazuh alerts were being counted two or three times over, and syslog and auth.log each showed up multiple times in the effective config.
 
-**Root cause:** Input stanzas had accumulated across multiple `inputs.conf` files — `system/local`, `apps/launcher/local`, and `apps/search/local`. Splunk merges inputs from all app contexts, so appending to one file over multiple sessions produced duplicates. Additionally, both Wazuh's `alerts.log` (plain text) and `alerts.json` were being monitored, ingesting every alert twice.
+The stanzas had piled up across several `inputs.conf` files, in `system/local`, `apps/launcher/local`, and `apps/search/local`. Splunk merges inputs from all of these, so appending to one file across multiple sessions just kept adding duplicates. On top of that both Wazuh's `alerts.log` and `alerts.json` were being monitored, so every alert came in twice.
 
-**Fix:** Used `btool` to find every effective definition, then consolidated to a single clean stanza per source and kept only the JSON Wazuh output:
+I used `btool` to find every place a source was actually defined, then cut it down to one stanza per source and kept only the JSON Wazuh output:
 
 ```bash
 sudo /opt/splunk/bin/splunk btool inputs list --debug | grep "monitor://"
 ```
 
-`btool` shows the *merged* configuration across all locations with the source file for each setting — the reliable way to debug "but I already removed it" duplication.
+btool shows the merged config across every location along with the file each setting comes from, which is the only reliable way to sort out this kind of "but I already deleted it" duplication.
 
 ### Windows forwarder inactive after downtime
 
-**Symptom:** After the lab sat idle, the Universal Forwarder service was running but showed `Configured but inactive forwards` — no Windows data reaching Splunk.
+After the lab sat idle for a while, the forwarder service was running but showed `Configured but inactive forwards`, and no Windows data was reaching Splunk.
 
-**Root cause:** The forwarder connection had not re-established after the extended downtime, though the network path was intact (`Test-NetConnection` to port 9997 succeeded).
-
-**Fix:** Restarting the forwarder service re-established the connection:
+The connection just had not re established after the downtime. The network path was fine, a `Test-NetConnection` to port 9997 succeeded. Restarting the forwarder service fixed it:
 
 ```powershell
 Restart-Service SplunkForwarder
 ```
 
-The forward flipped to `Active forwards: 192.168.0.150:9997` and Windows Event Logs resumed. A reminder that forwarders can silently go inactive after downtime and should be verified, not assumed.
+It flipped to `Active forwards: 192.168.0.150:9997` and the Windows logs came back. Worth remembering that forwarders can quietly go inactive after downtime, so it is something to check rather than assume.
 
----
+## Splunk Free limitations
 
-## Splunk Free — Known Limitations
+This lab runs on Splunk Free after the Enterprise trial ended. These constraints are worth being upfront about since they shape the setup.
 
-This lab runs on **Splunk Free** (after the Enterprise trial period). These constraints are documented honestly as they affect the deployment:
-
-| Limitation | Impact on this lab |
+| Limitation | Impact here |
 |---|---|
-| **No authentication** | Splunk Free removes login entirely — the web UI is open as admin on the local network. In production, Enterprise with role-based access control would be required. |
-| **500 MB/day ingestion cap** | Sufficient for lab volumes, but a real environment generating this many Suricata + Wazuh events would exceed it quickly. |
-| **No alerting / scheduled searches** | Real-time triggered alerts are disabled. Detection here is demonstrated through searches; automated response is shown in the OSSEC and Suricata + Wazuh phases, and Wazuh's own active response operates independently of Splunk licensing. |
+| No authentication | Splunk Free drops login entirely, the web UI is open as admin on the local network. In production you would need Enterprise with role based access control. |
+| 500 MB per day ingestion cap | Fine for lab volumes, but a real environment producing this many Suricata and Wazuh events would blow through it fast. |
+| No alerting or scheduled searches | Real time triggered alerts are off. Detection here is done through searches. Automated response was shown in the OSSEC and Suricata phases, and Wazuh's own active response runs independent of Splunk's license anyway. |
 
-Documenting these is itself part of the exercise — understanding SIEM licensing tiers and their operational tradeoffs is a real-world skill.
 
----
+## What this completes
 
-## What This Completes
-
-Across five phases this series has moved from a single host-based IDS engine to a unified SIEM aggregating network, host, and multi-OS telemetry:
+Across five phases the series went from a single host based IDS engine to a SIEM pulling together network, host, and multi OS telemetry:
 
 ```
-Phase 1 — OSSEC          Raw host-based detection engine
-Phase 2 — Wazuh          Full SIEM, multi-agent, MITRE mapping
-Phase 3 — Wazuh + AWS    Hybrid cloud + on-premise SOC
-Phase 4 — Suricata+Wazuh Network layer added — HIDS + NIDS
-Phase 5 — Splunk         All sources unified in one SIEM
+Phase 1  OSSEC             Raw host based detection engine
+Phase 2  Wazuh             Full SIEM, multi agent, MITRE mapping
+Phase 3  Wazuh and AWS     Hybrid cloud and on premise SOC
+Phase 4  Suricata + Wazuh  Network layer added, HIDS plus NIDS
+Phase 5  Splunk            All sources unified in one SIEM
 ```
 
-Every detection capability built across the series now reports into a single searchable platform. An analyst can pivot from a network signature to a host alert to a raw OS log for the same event in one query — which is the fundamental workflow of a Security Operations Center.
+Every detector built across the series now reports into one searchable place. You can pivot from a network signature to a host alert to a raw OS log for the same event in a single query, which is the basic day to day workflow of a SOC.
 
----
+## Skills I have demonstrated
 
-## Key Skills Demonstrated
-
-- Splunk Enterprise deployment — indexer, receiver, Universal Forwarder
-- Multi-source data onboarding — file monitors, WinEventLog API, forwarder
-- Cross-source correlation of a single attack (network + host + OS logs)
-- SPL search for threat detection and evidence retrieval
-- Real-world troubleshooting — Linux log permissions, config precedence, forwarder recovery
-- Understanding SIEM architecture and licensing tradeoffs
-
----
+- Splunk Enterprise deployment, indexer, receiver, Universal Forwarder
+- Onboarding multiple source types, file monitors, WinEventLog API, forwarder
+- Correlating a single attack across network, host, and OS logs
+- SPL search for detection and evidence retrieval
+- Real troubleshooting, Linux log permissions, config precedence, forwarder recovery
+- SIEM architecture and licensing tradeoffs
 
 ## Author
 
-**Emmanuel Siamoonga**
-Cloud Infrastructure · Network and Cloud Security
+Emmanuel Siamoonga
 
-*LinkedIn · GitHub*
+LinkedIn, GitHub
 
-> *"Defense in depth is not about adding more tools. It is about ensuring every layer catches what the previous layer missed — and that one platform can see them all."*
+> "Security is not a product, but a process." Bruce Schneier
